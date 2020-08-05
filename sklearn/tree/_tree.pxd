@@ -20,6 +20,7 @@ ctypedef np.npy_int32 INT32_t            # Signed 32 bit integer
 ctypedef np.npy_uint32 UINT32_t          # Unsigned 32 bit integer
 
 from ._splitter cimport Splitter
+from ._splitter cimport uSplitter
 from ._splitter cimport SplitRecord
 
 cdef struct Node:
@@ -100,5 +101,27 @@ cdef class TreeBuilder:
     cdef double min_impurity_decrease   # Impurity threshold for early stopping
 
     cpdef build(self, Tree tree, object X, np.ndarray y,
+                np.ndarray sample_weight=*)
+    cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight)
+
+
+cdef class uTreeBuilder:
+    # The TreeBuilder recursively builds a Tree object from training samples,
+    # using a Splitter object for splitting internal nodes and assigning
+    # values to leaves.
+    #
+    # This class controls the various stopping criteria and the node splitting
+    # evaluation order, e.g. depth-first or best-first.
+
+    cdef uSplitter splitter              # Splitting algorithm
+
+    cdef SIZE_t min_samples_split       # Minimum number of samples in an internal node
+    cdef SIZE_t min_samples_leaf        # Minimum number of samples in a leaf
+    cdef double min_weight_leaf         # Minimum weight in a leaf
+    cdef SIZE_t max_depth               # Maximal tree depth
+    cdef double min_impurity_split
+    cdef double min_impurity_decrease   # Impurity threshold for early stopping
+
+    cpdef build(self, Tree tree, object X, np.ndarray traitement, np.ndarray zeta, np.ndarray y,
                 np.ndarray sample_weight=*)
     cdef _check_input(self, object X, np.ndarray y, np.ndarray sample_weight)

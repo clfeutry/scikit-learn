@@ -6,6 +6,7 @@ import typing
 
 from ._base import BaseEnsemble
 from ._forest import RandomForestClassifier
+from ._forest import uRandomForestClassifier
 from ._forest import RandomForestRegressor
 from ._forest import RandomTreesEmbedding
 from ._forest import ExtraTreesClassifier
@@ -30,7 +31,7 @@ if typing.TYPE_CHECKING:
     )
 
 __all__ = ["BaseEnsemble",
-           "RandomForestClassifier", "RandomForestRegressor",
+           "RandomForestClassifier", "uRandomForestClassifier", "RandomForestRegressor",
            "RandomTreesEmbedding", "ExtraTreesClassifier",
            "ExtraTreesRegressor", "BaggingClassifier",
            "BaggingRegressor", "IsolationForest", "GradientBoostingClassifier",
