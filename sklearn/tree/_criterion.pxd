@@ -117,7 +117,8 @@ cdef class uCriterion:
     cdef double node_impurity(self) nogil
     cdef bint purity_eval(self) nogil
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil
+                                double* impurity_right, double* temp_imp_l,double* temp_imp_r) nogil
+
     cdef void node_value(self, double* dest) nogil
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
@@ -129,6 +130,10 @@ cdef class uClassificationCriterion(uCriterion):
     cdef SIZE_t* n_classes
     cdef SIZE_t sum_stride
 
+#cdef class uplift_G2(uClassificationCriterion):
+#    cdef void children_impurity2(self, double* impurity_left,
+#                                double* impurity_right) nogil
+ 
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""

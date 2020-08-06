@@ -71,7 +71,8 @@ CRITERIA_CLF = {"gini": _criterion.Gini,
                 "uplift_Chi": _criterion.uplift_Chi,
                 "uplift_CTS": _criterion.uplift_CTS,
                 "uplift_Adway": _criterion.uplift_Adway, 
-                "uplift_KL": _criterion.uplift_KL}
+                "uplift_KL": _criterion.uplift_KL,
+                "uplift_G2": _criterion.uplift_G2}
 
 CRITERIA_REG = {"mse": _criterion.MSE, "friedman_mse": _criterion.FriedmanMSE,
                 "mae": _criterion.MAE}
@@ -669,7 +670,7 @@ class uBaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
 
         
         random_state = check_random_state(self.random_state)
-
+        
         if self.ccp_alpha < 0.0:
             raise ValueError("ccp_alpha must be greater than or equal to 0")
 
@@ -872,8 +873,8 @@ class uBaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
         # Build tree
         criterion = self.criterion
         
-        
         if not isinstance(criterion, uCriterion):
+
             if is_classification:
                 criterion = CRITERIA_CLF[self.criterion](self.n_outputs_,
                                                          self.n_classes_)
@@ -882,7 +883,7 @@ class uBaseDecisionTree(MultiOutputMixin, BaseEstimator, metaclass=ABCMeta):
                                                          n_samples)
         
         SPLITTERS = SPARSE_SPLITTERS if issparse(X) else DENSE_USPLITTERS
-
+        
         splitter = self.splitter
         if not isinstance(self.splitter, uSplitter):
             splitter = SPLITTERS[self.splitter](criterion,

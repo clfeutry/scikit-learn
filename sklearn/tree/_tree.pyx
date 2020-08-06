@@ -23,7 +23,7 @@ from libc.math cimport fabs
 from libc.string cimport memcpy
 from libc.string cimport memset
 from libc.stdint cimport SIZE_MAX
-
+from libc.stdio cimport printf
 import numpy as np
 cimport numpy as np
 np.import_array()
@@ -200,7 +200,6 @@ cdef class uDepthFirstTreeBuilder(uTreeBuilder):
 
             while not stack.is_empty():
                 stack.pop(&stack_record)
-
                 start = stack_record.start
                 end = stack_record.end
                 depth = stack_record.depth
@@ -219,7 +218,7 @@ cdef class uDepthFirstTreeBuilder(uTreeBuilder):
                 if first:
                     impurity = splitter.node_impurity()
                     first = 0
-
+                #printf("impurity %f \n",impurity)    
                 is_leaf = (is_leaf or
                            (impurity <= min_impurity_split))
                 #printf("is_leaf_2 \t %d \t min_imp \t %f \n",is_leaf,min_impurity_split)
@@ -430,7 +429,7 @@ cdef class uBestFirstTreeBuilder(uTreeBuilder):
 
         if is_first:
             impurity = splitter.node_impurity()
-
+        
         n_node_samples = end - start
         is_leaf = (depth >= self.max_depth or
                    n_node_samples < self.min_samples_split or

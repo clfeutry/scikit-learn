@@ -34,7 +34,7 @@ from ._utils cimport rand_int
 from ._utils cimport rand_uniform
 from ._utils cimport RAND_R_MAX
 from ._utils cimport safe_realloc
-
+from libc.stdio cimport printf
 cdef double INFINITY = np.inf
 
 # Mitigate precision differences between 32 bit and 64 bit
@@ -524,7 +524,7 @@ cdef class uBestSplitter(uBaseDenseSplitter):
         cdef double rapport_verif = 0.0
         cdef double rapport_verif_2 = 0.0
         _init_split(&best, end)
-
+        
         # Sample up to max_features without replacement using a
         # Fisher-Yates-based algorithm (using the local variables `f_i` and
         # `f_j` to compute a permutation of the `features` array).
@@ -617,9 +617,9 @@ cdef class uBestSplitter(uBaseDenseSplitter):
                             if ((self.criterion.weighted_n_left < min_weight_leaf) or
                                     (self.criterion.weighted_n_right < min_weight_leaf)):
                                 continue
-
+                            #printf('ici')
                             current_proxy_improvement = self.criterion.proxy_impurity_improvement()
-
+                            #printf('ici apres')
                             if current_proxy_improvement > best_proxy_improvement:
                                 #printf("Tentative \n")
                                 if (self.criterion.sum_l_t[0] and self.criterion.sum_l_t[1] and self.criterion.sum_r_t[0]  and self.criterion.sum_r_t[1]):
@@ -659,7 +659,7 @@ cdef class uBestSplitter(uBaseDenseSplitter):
             self.criterion.update(best.pos)
             best.improvement = self.criterion.impurity_improvement(impurity)
             self.criterion.children_impurity(&best.impurity_left,
-                                             &best.impurity_right)
+                                             &best.impurity_right,NULL,NULL)
 
         # Respect invariant for constant features: the original order of
         # element in features[:n_known_constants] must be preserved for sibling

@@ -167,7 +167,6 @@ cdef class Criterion:
         cdef double impurity_left
         cdef double impurity_right
         self.children_impurity(&impurity_left, &impurity_right)
-
         return (- self.weighted_n_right * impurity_right
                 - self.weighted_n_left * impurity_left)
 
@@ -1398,7 +1397,7 @@ cdef class uCriterion:
 
     cdef int update(self, SIZE_t new_pos) nogil except -1:
         """Updated statistics by moving samples[pos:new_pos] to the left child.
-
+	
         This updates the collected statistics by moving samples[pos:new_pos]
         from the right child to the left child. It must be implemented by
         the subclass.
@@ -1427,7 +1426,8 @@ cdef class uCriterion:
        pass
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Placeholder for calculating the impurity of children.
 
         Placeholder for a method which evaluates the impurity in
@@ -1473,7 +1473,7 @@ cdef class uCriterion:
         """
         cdef double impurity_left
         cdef double impurity_right
-        self.children_impurity(&impurity_left, &impurity_right)
+        self.children_impurity(&impurity_left, &impurity_right,NULL,NULL)
 
         return ( self.weighted_n_right * impurity_right
                 + self.weighted_n_left * impurity_left) /(self.weighted_n_right+self.weighted_n_left)
@@ -1504,7 +1504,7 @@ cdef class uCriterion:
         cdef double impurity_left
         cdef double impurity_right
 
-        self.children_impurity(&impurity_left, &impurity_right)
+        self.children_impurity(&impurity_left, &impurity_right,NULL,NULL)
         #printf("ALERTE \t %f \t %f \t %f \n imp right %f \t imp left %f \n res %f \n",impurity,self.weighted_n_right / self.weighted_n_node_samples * impurity_right, self.weighted_n_left / self.weighted_n_node_samples * impurity_left ,impurity_right, impurity_left, ((self.weighted_n_node_samples / self.weighted_n_samples) * (-impurity + (self.weighted_n_right / self.weighted_n_node_samples * impurity_right) + (self.weighted_n_left /  self.weighted_n_node_samples * impurity_left))))
         return ((self.weighted_n_node_samples / self.weighted_n_samples) *
                 (-impurity + (self.weighted_n_right / 
@@ -1919,7 +1919,8 @@ cdef class uClassificationCriterion(uCriterion):
     cdef bint purity_eval(self) nogil:
         pass
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         pass
 
     cdef void node_value(self, double* dest) nogil:
@@ -2001,7 +2002,8 @@ cdef class uplift_KL(uClassificationCriterion):
         return KL
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2083,7 +2085,8 @@ cdef class uplift_ED(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2143,7 +2146,8 @@ cdef class uplift_Chi(uClassificationCriterion):
         return Chi*(1/(1-q_count)+1/q_count)
         
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2216,7 +2220,8 @@ cdef class uplift_CTS(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2272,7 +2277,8 @@ cdef class uplift_Adway(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right) nogil:
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2302,3 +2308,150 @@ cdef class uplift_Adway(uClassificationCriterion):
 
         impurity_left[0] = 1000000-Adway_left 
         impurity_right[0] = 1000000-Adway_right
+
+
+cdef class uplift_G2(uClassificationCriterion):
+    r"""uplift G2 impurity criterion.
+
+    """
+    cdef double proxy_impurity_improvement(self) nogil:
+        """Compute a proxy of the impurity reduction
+
+        This method is used to speed up the search for the best split.
+        It is a proxy quantity such that the split that maximizes this value
+        also maximizes the impurity improvement. It neglects all constant terms
+        of the impurity decrease for a given split.
+
+        The absolute impurity improvement is only computed by the
+        impurity_improvement method once the best split has been found.
+        """
+        cdef double impurity_left 
+        cdef double impurity_right
+        cdef double* temp_imp_l = <double*> calloc(3, sizeof(double))
+        cdef double* temp_imp_r = <double*> calloc(3, sizeof(double))
+        cdef double G2 
+        self.children_impurity(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
+        G2= (temp_imp_r[0] - temp_imp_l[0])**2 /((temp_imp_r[1] + temp_imp_l[1])*(temp_imp_r[2] + temp_imp_l[2]))
+        free(temp_imp_l)
+        free(temp_imp_r)	
+        #printf("ALERTE \t %f \t %f \t %f \t %f \n",impurity_left[0] ,impurity_right[0],impurity_left[1] ,impurity_right[1],impurity_left[2] ,impurity_right[2])
+        return G2
+
+    cdef double impurity_improvement(self, double impurity) nogil:
+        """Compute the improvement in impurity
+
+        This method computes the improvement in impurity when a split occurs.
+        The weighted impurity improvement equation is the following:
+
+            N_t / N * (-impurity + N_t_R / N_t * right_impurity
+                                + N_t_L / N_t * left_impurity)
+
+        where N is the total number of samples, N_t is the number of samples
+        at the current node, N_t_L is the number of samples in the left child,
+        and N_t_R is the number of samples in the right child,
+
+        Parameters
+        ----------
+        impurity : double
+            The initial impurity of the node before the split
+
+        Return
+        ------
+        double : improvement in impurity after the split occurs
+        """
+
+        cdef double impurity_left 
+        cdef double impurity_right 
+        cdef double* temp_imp_l = <double*> calloc(3, sizeof(double))
+        cdef double* temp_imp_r = <double*> calloc(3, sizeof(double))
+        cdef double G2
+        self.children_impurity(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
+        G2 = (impurity*(temp_imp_r[0] - temp_imp_l[0])**2)/((temp_imp_r[1] + temp_imp_l[1])*(temp_imp_r[2] + temp_imp_l[2]))
+        free(temp_imp_l)
+        free(temp_imp_r)	
+        
+        #printf("ALERTE \t %f \t %f \t %f \t %f \n",impurity_left[0] ,impurity_right[0],impurity_left[1] ,impurity_right[1],impurity_left[2] ,impurity_right[2])
+        #printf('apres  \t %f \t %f \t %f \t %f \t %f \t %f \t impur %f \t value %f \n', impurity_left[0], impurity_right[0], impurity_left[1], impurity_right[1], impurity_left[2], impurity_right[2],impurity,(impurity*(impurity_right[0] - impurity_left[0])**2)/((impurity_right[1] + impurity_left[1])*(impurity_right[2] + impurity_left[2])) )
+        
+        return G2
+
+    cdef bint purity_eval(self) nogil:
+        cdef bint b = True
+        b = b and ((self.sum_tot_y1t[1]==self.sum_tot_t[1]) or self.sum_tot_y1t[1]==0)
+        b = b and ((self.sum_tot_y1t[0]==self.sum_tot_t[0]) or self.sum_tot_y1t[0]==0)
+        return b
+	
+    cdef double node_impurity(self) nogil:
+        """Evaluate the impurity of the current node, i.e. the impurity of
+        samples[start:end] using the criterion."""
+
+
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        cdef double temp = sum_tot_t[0]+sum_tot_t[1]-4
+
+        sum_total += self.sum_stride
+        sum_tot_y1t += self.sum_stride
+        sum_tot_t += self.sum_stride
+        return temp
+        
+
+    cdef void children_impurity(self, double* impurity_left,
+                                double* impurity_right,double* temp_imp_l ,
+                                double* temp_imp_r) nogil:
+        """Evaluate the impurity in children nodes
+        """
+
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_right = self.sum_right
+        cdef double* sum_l_y1t = self.sum_l_y1t
+        cdef double* sum_r_y1t = self.sum_r_y1t
+        cdef double* sum_l_t = self.sum_l_t
+        cdef double* sum_r_t = self.sum_r_t
+        cdef double l_y1t1 
+        cdef double l_y1t0
+        cdef double r_y1t1
+        cdef double r_y1t0
+        cdef double sig_left
+        cdef double sig_right
+        cdef double inv_left
+        cdef double inv_right
+        
+        impurity_left[0] =sum_l_t[0]+sum_l_t[1]-4
+        impurity_right[0] =sum_r_t[1]+sum_r_t[1]-4
+        if temp_imp_l==NULL:
+            pass
+        elif ((sum_l_t[1]==0) or (sum_l_t[0]==0) or (sum_r_t[1]==0) or (sum_r_t[0]==0)):
+            temp_imp_l[0] = 0.0
+            temp_imp_r[0] = 0.0
+            temp_imp_l[1] = 1.0
+            temp_imp_r[1] = 1.0
+            temp_imp_l[2] = 1.0 
+            temp_imp_r[2] = 1.0
+        else:
+            l_y1t1 = sum_l_y1t[1] / sum_l_t[1]
+            l_y1t0 = sum_l_y1t[0] / sum_l_t[0]
+            r_y1t1 = sum_r_y1t[1] / sum_r_t[1]
+            r_y1t0 = sum_r_y1t[0] / sum_r_t[0]
+            sig_left = sum_l_t[0]*l_y1t0*(1-l_y1t0)+ sum_l_t[1]*l_y1t1*(1-l_y1t1)
+            sig_right =sum_r_t[0]*r_y1t0*(1-r_y1t0)+ sum_r_t[1]*r_y1t1*(1-r_y1t1)
+            inv_left = 1/sum_l_t[0]+1/sum_l_t[1]
+            inv_right = 1/sum_r_t[0]+1/sum_r_t[1] 	    
+            temp_imp_l[0] = l_y1t1-l_y1t0
+            temp_imp_r[0] = r_y1t1-r_y1t0
+            temp_imp_l[1] = inv_left
+            temp_imp_r[1] = inv_right
+            temp_imp_l[2] = sig_left 
+            temp_imp_r[2] = sig_right
+            #printf('before \t %f \t %f \t %f \t %f \t %f \t %f \n', impurity_left[0], impurity_right[0], impurity_left[1], impurity_right[1], impurity_left[2], impurity_right[2] )
+        sum_left += self.sum_stride
+        sum_right += self.sum_stride
+        sum_l_y1t += self.sum_stride
+        sum_r_y1t += self.sum_stride
+        sum_l_t += self.sum_stride
+        sum_r_t += self.sum_stride
+
+
