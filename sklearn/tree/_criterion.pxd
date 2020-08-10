@@ -92,16 +92,15 @@ cdef class uCriterion:
     cdef double* sum_total          # For classification criteria, the sum of the
     cdef double* sum_tot_y1t        # weighted count of each label. For regression,
     cdef double* sum_tot_t          # the sum of w*y. sum_total[k] is equal to
-    cdef double* sum_tot_v          # sum_{i=start}^{end-1} w[samples[i]]*y[samples[i], k],
+                                    # sum_{i=start}^{end-1} w[samples[i]]*y[samples[i], k],
                                     # where k is output index.
     cdef double* sum_left
     cdef double* sum_l_y1t
     cdef double* sum_l_t            # Same as above, but for the left side of the split
-    cdef double* sum_l_v
     cdef double* sum_right          # same as above, but for the right side of the split
     cdef double* sum_r_y1t
     cdef double* sum_r_t
-    cdef double* sum_r_v
+    
     
     # The criterion object is maintained such that left and right collected
     # statistics correspond to samples[start:pos] and samples[pos:end].
@@ -116,9 +115,7 @@ cdef class uCriterion:
     cdef int update(self, SIZE_t new_pos) nogil except -1
     cdef double node_impurity(self) nogil
     cdef bint purity_eval(self) nogil
-    cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right, double* temp_imp_l,double* temp_imp_r) nogil
-
+    cdef void children_impurity(self, double* impurity_left,double* impurity_right) nogil
     cdef void node_value(self, double* dest) nogil
     cdef double impurity_improvement(self, double impurity) nogil
     cdef double proxy_impurity_improvement(self) nogil
@@ -130,10 +127,15 @@ cdef class uClassificationCriterion(uCriterion):
     cdef SIZE_t* n_classes
     cdef SIZE_t sum_stride
 
-#cdef class uplift_G2(uClassificationCriterion):
-#    cdef void children_impurity2(self, double* impurity_left,
-#                                double* impurity_right) nogil
- 
+cdef class u_v_ClassificationCriterion(uCriterion):
+    """Abstract criterion for classification."""
+
+    cdef SIZE_t* n_classes
+    cdef SIZE_t sum_stride
+    cdef double* sum_tot_v
+    cdef double* sum_l_v
+    cdef double* sum_r_v
+
 
 cdef class ClassificationCriterion(Criterion):
     """Abstract criterion for classification."""

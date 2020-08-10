@@ -1425,9 +1425,7 @@ cdef class uCriterion:
 
        pass
 
-    cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+    cdef void children_impurity(self, double* impurity_left, double* impurity_right) nogil:
         """Placeholder for calculating the impurity of children.
 
         Placeholder for a method which evaluates the impurity in
@@ -1473,7 +1471,7 @@ cdef class uCriterion:
         """
         cdef double impurity_left
         cdef double impurity_right
-        self.children_impurity(&impurity_left, &impurity_right,NULL,NULL)
+        self.children_impurity(&impurity_left, &impurity_right)
 
         return ( self.weighted_n_right * impurity_right
                 + self.weighted_n_left * impurity_left) /(self.weighted_n_right+self.weighted_n_left)
@@ -1504,7 +1502,7 @@ cdef class uCriterion:
         cdef double impurity_left
         cdef double impurity_right
 
-        self.children_impurity(&impurity_left, &impurity_right,NULL,NULL)
+        self.children_impurity(&impurity_left, &impurity_right)
         #printf("ALERTE \t %f \t %f \t %f \n imp right %f \t imp left %f \n res %f \n",impurity,self.weighted_n_right / self.weighted_n_node_samples * impurity_right, self.weighted_n_left / self.weighted_n_node_samples * impurity_left ,impurity_right, impurity_left, ((self.weighted_n_node_samples / self.weighted_n_samples) * (-impurity + (self.weighted_n_right / self.weighted_n_node_samples * impurity_right) + (self.weighted_n_left /  self.weighted_n_node_samples * impurity_left))))
         return ((self.weighted_n_node_samples / self.weighted_n_samples) *
                 (-impurity + (self.weighted_n_right / 
@@ -1514,6 +1512,408 @@ cdef class uCriterion:
 
 
 cdef class uClassificationCriterion(uCriterion):
+    """Abstract criterion for classification."""
+
+    def __cinit__(self, SIZE_t n_outputs,
+                  np.ndarray[SIZE_t, ndim=1] n_classes):
+        """Initialize attributes for this criterion.
+
+        Parameters
+        ----------
+        n_outputs : SIZE_t
+            The number of targets, the dimensionality of the prediction
+        n_classes : numpy.ndarray, dtype=SIZE_t
+            The number of unique classes in each target
+        """
+
+        self.sample_weight = NULL
+
+        self.samples = NULL
+        self.start = 0
+        self.pos = 0
+        self.end = 0
+
+        self.n_outputs = n_outputs
+        self.n_samples = 0
+        self.n_node_samples = 0
+        self.weighted_n_node_samples = 0.0
+        self.weighted_n_left = 0.0
+        self.weighted_n_right = 0.0
+
+        # Count labels for each output
+        self.sum_total = NULL
+        self.sum_left = NULL
+        self.sum_right = NULL
+        self.sum_tot_y1t = NULL
+        self.sum_l_y1t = NULL
+        self.sum_r_y1t = NULL
+        self.sum_tot_t = NULL
+        self.sum_l_t = NULL
+        self.sum_r_t = NULL
+        self.n_classes = NULL
+
+        safe_realloc(&self.n_classes, n_outputs)
+
+        cdef SIZE_t k = 0
+        cdef SIZE_t sum_stride = 0
+
+        # For each target, set the number of unique classes in that target,
+        # and also compute the maximal stride of all targets
+        for k in range(n_outputs):
+            self.n_classes[k] = n_classes[k]
+
+            if n_classes[k] > sum_stride:
+                sum_stride = n_classes[k]
+
+        self.sum_stride = sum_stride
+	
+        cdef SIZE_t n_elements = n_outputs * sum_stride
+        self.sum_total = <double*> calloc(n_elements, sizeof(double))
+        self.sum_left = <double*> calloc(n_elements, sizeof(double))
+        self.sum_right = <double*> calloc(n_elements, sizeof(double))
+        self.sum_tot_y1t = <double*> calloc(n_elements, sizeof(double))
+        self.sum_l_y1t = <double*> calloc(n_elements, sizeof(double))
+        self.sum_r_y1t = <double*> calloc(n_elements, sizeof(double))
+        self.sum_tot_t = <double*> calloc(n_elements, sizeof(double))
+        self.sum_l_t = <double*> calloc(n_elements, sizeof(double))
+        self.sum_r_t = <double*> calloc(n_elements, sizeof(double))
+        
+        if (self.sum_total == NULL or
+                self.sum_left == NULL or
+                self.sum_right == NULL):
+            raise MemoryError()
+
+    def __dealloc__(self):
+        """Destructor."""
+        free(self.n_classes)
+
+    def __reduce__(self):
+        return (type(self),
+                (self.n_outputs,
+                 sizet_ptr_to_ndarray(self.n_classes, self.n_outputs)),
+                self.__getstate__())
+
+    cdef int init(self, const DOUBLE_t[:, ::1] traitement, const DOUBLE_t[:, ::1] zeta, const DOUBLE_t[:, ::1] y,
+                  DOUBLE_t* sample_weight, double weighted_n_samples,
+                  SIZE_t* samples, SIZE_t start, SIZE_t end) nogil except -1:
+        """Initialize the criterion at node samples[start:end] and
+        children samples[start:start] and samples[start:end].
+
+        Returns -1 in case of failure to allocate memory (and raise MemoryError)
+        or 0 otherwise.
+
+        Parameters
+        ----------
+        y : array-like, dtype=DOUBLE_t
+            The target stored as a buffer for memory efficiency
+        sample_weight : array-like, dtype=DOUBLE_t
+            The weight of each sample
+        weighted_n_samples : double
+            The total weight of all samples
+        samples : array-like, dtype=SIZE_t
+            A mask on the samples, showing which ones we want to use
+        start : SIZE_t
+            The first sample to use in the mask
+        end : SIZE_t
+            The last sample to use in the mask
+        """
+        
+        self.traitement = traitement
+        self.zeta = zeta
+        self.y = y
+        self.sample_weight = sample_weight
+        self.samples = samples
+        self.start = start
+        self.end = end
+        self.n_node_samples = end - start
+        self.weighted_n_samples = weighted_n_samples
+        self.weighted_n_node_samples = 0.0
+	
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        
+        cdef SIZE_t i
+        cdef SIZE_t p
+        cdef SIZE_t k
+        cdef SIZE_t c
+        cdef SIZE_t c_t
+        cdef DOUBLE_t v
+        cdef DOUBLE_t w = 1.0
+        cdef SIZE_t offset = 0
+        
+        for k in range(self.n_outputs):
+            memset(sum_total + offset, 0, n_classes[k] * sizeof(double))
+            memset(sum_tot_y1t + offset, 0, n_classes[k] * sizeof(double))
+            memset(sum_tot_t + offset, 0, n_classes[k] * sizeof(double))
+            offset += self.sum_stride
+
+        for p in range(start, end):
+            i = samples[p]
+
+            # w is originally set to be 1.0, meaning that if no sample weights
+            # are given, the default weight of each sample is 1.0
+            if sample_weight != NULL:
+                w = sample_weight[i]
+
+            # Count weighted class frequency for each target
+            for k in range(self.n_outputs):
+                c = <SIZE_t> self.y[i, k]
+                c_t = <SIZE_t> self.traitement[i,k]
+                v = <DOUBLE_t> self.zeta[i,k]
+                sum_total[k * self.sum_stride + c] += w
+                sum_tot_t[k * self.sum_stride + c_t] += w
+                sum_tot_y1t[k * self.sum_stride + c_t] += w*c
+            #printf("init sum_tot  en cours %f %f \t %f %f \t%f %f \t \n p: %d \t i : %d \t w: %f \t v: %f \n",sum_total[0],sum_total[1],sum_tot_y1t[0],sum_tot_y1t[1],sum_tot_v[0],sum_tot_v[1],p,i,w,v)
+		
+            self.weighted_n_node_samples += w
+        #printf("init sum_tot  fin %f %f \t %f %f \t%f %f \t \n",sum_total[0],sum_total[1],sum_tot_y1t[0],sum_tot_y1t[1],sum_tot_t[0],sum_tot_t[1])
+        # Reset to pos=start
+        self.reset()
+        return 0
+
+    cdef int reset(self) nogil except -1:
+        """Reset the criterion at pos=start
+
+        Returns -1 in case of failure to allocate memory (and raise MemoryError)
+        or 0 otherwise.
+        """
+        self.pos = self.start
+
+        self.weighted_n_left = 0.0
+        self.weighted_n_right = self.weighted_n_node_samples
+
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_l_y1t = self.sum_l_y1t
+        cdef double* sum_l_t = self.sum_l_t
+        
+        cdef double* sum_right = self.sum_right
+        cdef double* sum_r_y1t = self.sum_r_y1t
+        cdef double* sum_r_t = self.sum_r_t
+        
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef SIZE_t k
+
+        for k in range(self.n_outputs):
+            memset(sum_left, 0, n_classes[k] * sizeof(double))
+            memset(sum_l_y1t, 0, n_classes[k] * sizeof(double))
+            memset(sum_l_t, 0, n_classes[k] * sizeof(double))
+            
+            memcpy(sum_right, sum_total, n_classes[k] * sizeof(double))
+            memcpy(sum_r_y1t, sum_tot_y1t, n_classes[k] * sizeof(double))
+            memcpy(sum_r_t, sum_tot_t, n_classes[k] * sizeof(double))
+            
+            sum_total += self.sum_stride
+            sum_tot_y1t += self.sum_stride
+            sum_tot_t += self.sum_stride
+            
+            sum_left += self.sum_stride
+            sum_l_y1t += self.sum_stride
+            sum_l_t += self.sum_stride
+            
+            sum_right += self.sum_stride
+            sum_r_y1t += self.sum_stride
+            sum_r_t += self.sum_stride
+        return 0
+
+    cdef int reverse_reset(self) nogil except -1:
+        """Reset the criterion at pos=end
+
+        Returns -1 in case of failure to allocate memory (and raise MemoryError)
+        or 0 otherwise.
+        """
+        self.pos = self.end
+
+        self.weighted_n_left = self.weighted_n_node_samples
+        self.weighted_n_right = 0.0
+
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        
+        cdef double* sum_right = self.sum_right
+        cdef double* sum_r_y1t = self.sum_r_y1t
+        cdef double* sum_r_t = self.sum_r_t
+        
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_l_y1t = self.sum_l_y1t
+        cdef double* sum_l_t = self.sum_l_t
+        
+
+
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef SIZE_t k
+
+        for k in range(self.n_outputs):
+            memset(sum_right, 0, n_classes[k] * sizeof(double))
+            memset(sum_r_y1t, 0, n_classes[k] * sizeof(double))
+            memset(sum_r_t, 0, n_classes[k] * sizeof(double))
+            
+            memcpy(sum_left, sum_total, n_classes[k] * sizeof(double))
+            memcpy(sum_l_y1t, sum_tot_y1t, n_classes[k] * sizeof(double))
+            memcpy(sum_l_t, sum_tot_t, n_classes[k] * sizeof(double))
+            
+            sum_total += self.sum_stride
+            sum_tot_y1t += self.sum_stride
+            sum_tot_t += self.sum_stride
+            
+            sum_left += self.sum_stride
+            sum_l_y1t += self.sum_stride
+            sum_l_t += self.sum_stride
+            
+            sum_right += self.sum_stride
+            sum_r_y1t += self.sum_stride
+            sum_r_t += self.sum_stride
+        return 0
+
+    cdef int update(self, SIZE_t new_pos) nogil except -1:
+        """Updated statistics by moving samples[pos:new_pos] to the left child.
+
+        Returns -1 in case of failure to allocate memory (and raise MemoryError)
+        or 0 otherwise.
+
+        Parameters
+        ----------
+        new_pos : SIZE_t
+            The new ending position for which to move samples from the right
+            child to the left child.
+        """
+        cdef SIZE_t pos = self.pos
+        cdef SIZE_t end = self.end
+
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        
+        cdef double* sum_right = self.sum_right
+        cdef double* sum_r_y1t = self.sum_r_y1t
+        cdef double* sum_r_t = self.sum_r_t
+        
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_l_y1t = self.sum_l_y1t
+        cdef double* sum_l_t = self.sum_l_t
+        
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef SIZE_t* samples = self.samples
+        cdef DOUBLE_t* sample_weight = self.sample_weight
+
+        cdef SIZE_t i
+        cdef SIZE_t p
+        cdef SIZE_t k
+        cdef SIZE_t c
+        cdef SIZE_t c_t
+        cdef SIZE_t label_index
+        cdef DOUBLE_t w = 1.0
+
+        # Update statistics up to new_pos
+        #
+        # Given that
+        #   sum_left[x] +  sum_right[x] = sum_total[x]
+        # and that sum_total is known, we are going to update
+        # sum_left from the direction that require the least amount
+        # of computations, i.e. from pos to new_pos or from end to new_po.
+
+        if (new_pos - pos) <= (end - new_pos):
+            for p in range(pos, new_pos):
+                i = samples[p]
+
+                if sample_weight != NULL:
+                    w = sample_weight[i]
+
+                for k in range(self.n_outputs):
+                    c = <SIZE_t> self.y[i, k]
+                    c_t = <SIZE_t> self.traitement[i,k]
+                    sum_left[k * self.sum_stride + c] += w
+                    sum_l_t[k * self.sum_stride + c_t] += w
+                    sum_l_y1t[k * self.sum_stride + c_t] += w*c
+                self.weighted_n_left += w
+
+        else:
+            self.reverse_reset()
+
+            for p in range(end - 1, new_pos - 1, -1):
+                i = samples[p]
+
+                if sample_weight != NULL:
+                    w = sample_weight[i]
+
+                for k in range(self.n_outputs):
+                    c = <SIZE_t> self.y[i, k]
+                    c_t = <SIZE_t> self.traitement[i,k]
+                    sum_left[k * self.sum_stride + c] -= w
+                    sum_l_t[k * self.sum_stride + c_t] -= w
+                    sum_l_y1t[k * self.sum_stride + c_t] -= w*c
+                self.weighted_n_left -= w
+				     
+        # Update right part statistics
+        self.weighted_n_right = self.weighted_n_node_samples - self.weighted_n_left
+        for k in range(self.n_outputs):
+            for c in range(n_classes[k]):
+                sum_right[c] = sum_total[c] - sum_left[c]
+                sum_r_y1t[c] = sum_tot_y1t[c] - sum_l_y1t[c]
+                sum_r_t[c] = sum_tot_t[c] - sum_l_t[c]
+            #printf("\t tot %f %f \t %f %f \t %f %f \n \t right %f %f \t %f %f \t %f %f \n \t left %f %f \t %f %f \t %f %f \n",sum_total[0],sum_total[1],sum_tot_y1t[0],sum_tot_y1t[1],sum_tot_t[0],sum_tot_t[1],sum_right[0],sum_right[1],sum_r_y1t[0],sum_r_y1t[1],sum_r_t[0],sum_r_t[1],sum_left[0],sum_left[1],sum_l_y1t[0],sum_l_y1t[1],sum_l_t[0],sum_l_t[1])
+            sum_total += self.sum_stride
+            sum_tot_y1t += self.sum_stride
+            sum_tot_t += self.sum_stride
+        
+            sum_left += self.sum_stride
+            sum_l_y1t += self.sum_stride
+            sum_l_t += self.sum_stride
+        
+            sum_right += self.sum_stride
+            sum_r_y1t += self.sum_stride
+            sum_r_t += self.sum_stride
+        self.pos = new_pos
+        return 0
+
+    cdef double node_impurity(self) nogil:
+        pass
+    cdef bint purity_eval(self) nogil:
+        pass
+    cdef void children_impurity(self, double* impurity_left, double* impurity_right) nogil:
+        pass
+
+    cdef void node_value(self, double* dest) nogil:
+        """Compute the node value of samples[start:end] and save it into dest.
+
+        Parameters
+        ----------
+        dest : double pointer
+            The memory address which we will save the node value into.
+        """
+
+        cdef double* sum_total = self.sum_total
+        cdef double* sum_tot_y1t = self.sum_tot_y1t
+        cdef double* sum_tot_t = self.sum_tot_t
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef SIZE_t k
+
+        for k in range(self.n_outputs):
+            #on recopie uplift dans sum_total par facilite
+            sum_total[0]=sum_tot_y1t[1] / sum_tot_t[1]-sum_tot_y1t[0] / sum_tot_t[0]
+            sum_total[1]=sum_total[0]
+            #printf("\t UplifT %f L_chapeau %f \n", sum_total[0], sum_total[1])
+            memcpy(dest, sum_total, n_classes[k] * sizeof(double))
+            #memcpy(dest, sum_total, n_classes[k] * sizeof(double))
+            dest += self.sum_stride
+            #memcpy(dest, sum_tot_y1t, n_classes[k] * sizeof(double))
+            #dest += self.sum_stride
+            #memcpy(dest, sum_tot_t, n_classes[k] * sizeof(double))
+            #dest += self.sum_stride
+
+            sum_total += self.sum_stride
+            sum_tot_y1t += self.sum_stride
+            sum_tot_t += self.sum_stride
+            
+
+
+cdef class u_v_ClassificationCriterion(uCriterion):
     """Abstract criterion for classification."""
 
     def __cinit__(self, SIZE_t n_outputs,
@@ -1918,9 +2318,7 @@ cdef class uClassificationCriterion(uCriterion):
         pass
     cdef bint purity_eval(self) nogil:
         pass
-    cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+    cdef void children_impurity(self, double* impurity_left, double* impurity_right) nogil:
         pass
 
     cdef void node_value(self, double* dest) nogil:
@@ -1936,7 +2334,6 @@ cdef class uClassificationCriterion(uCriterion):
         cdef double* sum_tot_y1t = self.sum_tot_y1t
         cdef double* sum_tot_t = self.sum_tot_t
         cdef double* sum_tot_v = self.sum_tot_v
-
         cdef SIZE_t* n_classes = self.n_classes
         cdef SIZE_t k
 
@@ -1944,18 +2341,18 @@ cdef class uClassificationCriterion(uCriterion):
             #on recopie uplift dans sum_total par facilite
             sum_total[0]=sum_tot_y1t[1] / sum_tot_t[1]-sum_tot_y1t[0] / sum_tot_t[0]
             sum_total[1]=sum_total[0]
+            #sum_total[1]=sum_total[0]**2 + (sum_tot_v[1]-2*sum_total[0]*sum_tot_v[0])/(sum_tot_t[0]+sum_tot_t[1])
+            
+            #printf("\t UplifT %f L_chapeau %f \n", sum_total[0], sum_total[1])
             memcpy(dest, sum_total, n_classes[k] * sizeof(double))
-            #memcpy(dest, sum_total, n_classes[k] * sizeof(double))
             dest += self.sum_stride
-            #memcpy(dest, sum_tot_y1t, n_classes[k] * sizeof(double))
-            #dest += self.sum_stride
-            #memcpy(dest, sum_tot_t, n_classes[k] * sizeof(double))
-            #dest += self.sum_stride
-
+            
             sum_total += self.sum_stride
             sum_tot_y1t += self.sum_stride
             sum_tot_t += self.sum_stride
             sum_tot_v += self.sum_stride
+
+
 
 
 cdef class uplift_KL(uClassificationCriterion):
@@ -2002,8 +2399,7 @@ cdef class uplift_KL(uClassificationCriterion):
         return KL
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+                                double* impurity_right) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2085,8 +2481,7 @@ cdef class uplift_ED(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+                                double* impurity_right) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2146,8 +2541,7 @@ cdef class uplift_Chi(uClassificationCriterion):
         return Chi*(1/(1-q_count)+1/q_count)
         
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+                                double* impurity_right) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2220,8 +2614,7 @@ cdef class uplift_CTS(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+                                double* impurity_right) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2245,7 +2638,7 @@ cdef class uplift_CTS(uClassificationCriterion):
         impurity_left[0] = CTS_left 
         impurity_right[0] = CTS_right
 
-cdef class uplift_Adway(uClassificationCriterion):
+cdef class uplift_Adway(u_v_ClassificationCriterion):
     r"""uplift Adway impurity criterion.
 
     """
@@ -2266,7 +2659,9 @@ cdef class uplift_Adway(uClassificationCriterion):
         cdef double* sum_tot_t = self.sum_tot_t
         cdef double* sum_tot_v = self.sum_tot_v
         cdef double uplift = (sum_tot_y1t[1] / sum_tot_t[1]-sum_tot_y1t[0] / sum_tot_t[0])
-        cdef double Adway = uplift**2 + (sum_tot_v[1]-2*uplift*sum_tot_v[0])/(sum_tot_t[0]+sum_tot_t[1])
+        #cdef double Adway = uplift**2 + (sum_tot_v[1]-2*uplift*sum_tot_v[0])/(sum_tot_t[0]+sum_tot_t[1])
+        cdef double Adway = uplift**2 + (sum_tot_v[1]-2*uplift*sum_tot_v[0])/(self.weighted_n_node_samples)
+        
 
         #printf("total_t %f \t total_z %f \n",sum_tot_t[1]+sum_tot_t[0],sum_tot_v[1]+sum_tot_v[0])
         sum_total += self.sum_stride
@@ -2277,8 +2672,7 @@ cdef class uplift_Adway(uClassificationCriterion):
         
 
     cdef void children_impurity(self, double* impurity_left,
-                                double* impurity_right,double* temp_imp_l ,
-                                double* temp_imp_r) nogil:
+                                double* impurity_right) nogil:
         """Evaluate the impurity in children nodes
         """
 
@@ -2293,8 +2687,8 @@ cdef class uplift_Adway(uClassificationCriterion):
         cdef double* sum_r_v = self.sum_r_v
         cdef double uplift_left = (sum_l_y1t[1] / sum_l_t[1]-sum_l_y1t[0] / sum_l_t[0])
         cdef double uplift_right = (sum_r_y1t[1] / sum_r_t[1]-sum_r_y1t[0] / sum_r_t[0])
-        cdef double Adway_left = uplift_left**2 + (sum_l_v[1]-2*uplift_left*sum_l_v[0])/(sum_l_t[0]+sum_l_t[1])
-        cdef double Adway_right = uplift_right**2 + (sum_r_v[1]-2*uplift_right*sum_r_v[0])/(sum_r_t[0]+sum_r_t[1])
+        cdef double Adway_left = uplift_left**2 + (sum_l_v[1]-2*uplift_left*sum_l_v[0])/(self.weighted_n_left)
+        cdef double Adway_right = uplift_right**2 + (sum_r_v[1]-2*uplift_right*sum_r_v[0])/(self.weighted_n_right)
         #printf("left_t %f \t left_z %f \n",sum_l_t[0]+sum_l_t[1],sum_l_v[0]+sum_l_v[1])        
         sum_left += self.sum_stride
         sum_right += self.sum_stride
@@ -2330,7 +2724,7 @@ cdef class uplift_G2(uClassificationCriterion):
         cdef double* temp_imp_l = <double*> calloc(3, sizeof(double))
         cdef double* temp_imp_r = <double*> calloc(3, sizeof(double))
         cdef double G2 
-        self.children_impurity(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
+        self.children_impurity_G2(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
         G2= (temp_imp_r[0] - temp_imp_l[0])**2 /((temp_imp_r[1] + temp_imp_l[1])*(temp_imp_r[2] + temp_imp_l[2]))
         free(temp_imp_l)
         free(temp_imp_r)	
@@ -2365,7 +2759,7 @@ cdef class uplift_G2(uClassificationCriterion):
         cdef double* temp_imp_l = <double*> calloc(3, sizeof(double))
         cdef double* temp_imp_r = <double*> calloc(3, sizeof(double))
         cdef double G2
-        self.children_impurity(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
+        self.children_impurity_G2(&impurity_left, &impurity_right,temp_imp_l,temp_imp_r)
         G2 = (impurity*(temp_imp_r[0] - temp_imp_l[0])**2)/((temp_imp_r[1] + temp_imp_l[1])*(temp_imp_r[2] + temp_imp_l[2]))
         free(temp_imp_l)
         free(temp_imp_r)	
@@ -2390,15 +2784,39 @@ cdef class uplift_G2(uClassificationCriterion):
         cdef double* sum_total = self.sum_total
         cdef double* sum_tot_y1t = self.sum_tot_y1t
         cdef double* sum_tot_t = self.sum_tot_t
-        cdef double temp = sum_tot_t[0]+sum_tot_t[1]-4
+        cdef double temp = self.weighted_n_node_samples-4
 
         sum_total += self.sum_stride
         sum_tot_y1t += self.sum_stride
         sum_tot_t += self.sum_stride
         return temp
         
-
+    
     cdef void children_impurity(self, double* impurity_left,
+                                double* impurity_right) nogil:
+        """Evaluate the impurity in children nodes
+        """
+
+        cdef SIZE_t* n_classes = self.n_classes
+        cdef double* sum_left = self.sum_left
+        cdef double* sum_right = self.sum_right
+        cdef double* sum_l_y1t = self.sum_l_y1t
+        cdef double* sum_r_y1t = self.sum_r_y1t
+        cdef double* sum_l_t = self.sum_l_t
+        cdef double* sum_r_t = self.sum_r_t
+        
+        impurity_left[0] = self.weighted_n_left -4
+        impurity_right[0] = self.weighted_n_right -4
+        
+        sum_left += self.sum_stride
+        sum_right += self.sum_stride
+        sum_l_y1t += self.sum_stride
+        sum_r_y1t += self.sum_stride
+        sum_l_t += self.sum_stride
+        sum_r_t += self.sum_stride
+
+
+    cdef void children_impurity_G2(self, double* impurity_left,
                                 double* impurity_right,double* temp_imp_l ,
                                 double* temp_imp_r) nogil:
         """Evaluate the impurity in children nodes
@@ -2415,16 +2833,11 @@ cdef class uplift_G2(uClassificationCriterion):
         cdef double l_y1t0
         cdef double r_y1t1
         cdef double r_y1t0
-        cdef double sig_left
-        cdef double sig_right
-        cdef double inv_left
-        cdef double inv_right
         
-        impurity_left[0] =sum_l_t[0]+sum_l_t[1]-4
-        impurity_right[0] =sum_r_t[1]+sum_r_t[1]-4
-        if temp_imp_l==NULL:
-            pass
-        elif ((sum_l_t[1]==0) or (sum_l_t[0]==0) or (sum_r_t[1]==0) or (sum_r_t[0]==0)):
+        impurity_left[0] = self.weighted_n_left -4
+        impurity_right[0] = self.weighted_n_right -4
+        
+        if ((sum_l_t[1]==0) or (sum_l_t[0]==0) or (sum_r_t[1]==0) or (sum_r_t[0]==0)):
             temp_imp_l[0] = 0.0
             temp_imp_r[0] = 0.0
             temp_imp_l[1] = 1.0
@@ -2436,17 +2849,15 @@ cdef class uplift_G2(uClassificationCriterion):
             l_y1t0 = sum_l_y1t[0] / sum_l_t[0]
             r_y1t1 = sum_r_y1t[1] / sum_r_t[1]
             r_y1t0 = sum_r_y1t[0] / sum_r_t[0]
-            sig_left = sum_l_t[0]*l_y1t0*(1-l_y1t0)+ sum_l_t[1]*l_y1t1*(1-l_y1t1)
-            sig_right =sum_r_t[0]*r_y1t0*(1-r_y1t0)+ sum_r_t[1]*r_y1t1*(1-r_y1t1)
-            inv_left = 1/sum_l_t[0]+1/sum_l_t[1]
-            inv_right = 1/sum_r_t[0]+1/sum_r_t[1] 	    
+            
             temp_imp_l[0] = l_y1t1-l_y1t0
             temp_imp_r[0] = r_y1t1-r_y1t0
-            temp_imp_l[1] = inv_left
-            temp_imp_r[1] = inv_right
-            temp_imp_l[2] = sig_left 
-            temp_imp_r[2] = sig_right
+            temp_imp_l[1] = 1/sum_l_t[0]+1/sum_l_t[1] #somme inverse gauche
+            temp_imp_r[1] = 1/sum_r_t[0]+1/sum_r_t[1] #somme inverse droite
+            temp_imp_l[2] = sum_l_t[0]*l_y1t0*(1-l_y1t0)+ sum_l_t[1]*l_y1t1*(1-l_y1t1) #sigma gauche
+            temp_imp_r[2] = sum_r_t[0]*r_y1t0*(1-r_y1t0)+ sum_r_t[1]*r_y1t1*(1-r_y1t1) #sigma droit
             #printf('before \t %f \t %f \t %f \t %f \t %f \t %f \n', impurity_left[0], impurity_right[0], impurity_left[1], impurity_right[1], impurity_left[2], impurity_right[2] )
+        
         sum_left += self.sum_stride
         sum_right += self.sum_stride
         sum_l_y1t += self.sum_stride

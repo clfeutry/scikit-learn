@@ -659,7 +659,7 @@ cdef class uBestSplitter(uBaseDenseSplitter):
             self.criterion.update(best.pos)
             best.improvement = self.criterion.impurity_improvement(impurity)
             self.criterion.children_impurity(&best.impurity_left,
-                                             &best.impurity_right,NULL,NULL)
+                                             &best.impurity_right)
 
         # Respect invariant for constant features: the original order of
         # element in features[:n_known_constants] must be preserved for sibling

@@ -1687,7 +1687,8 @@ class uForestClassifier(ClassifierMixin, uBaseForest, metaclass=ABCMeta):
 
         if self.n_outputs_ == 1:
 #            return self.classes_.take(np.argmax(proba, axis=1), axis=0)
-            return np.max(proba, axis=1)
+            #return np.max(proba, axis=1)
+            return proba[:,0]
 
         else:
             n_samples = proba[0].shape[0]
